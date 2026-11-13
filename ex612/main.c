@@ -1,0 +1,147 @@
+#include <stdio.h>
+#include <pthread.h>
+#include <stdlib.h>
+#include <errno.h>
+#include "debug.h"
+
+#define C_ERRO_PTHREAD_CREATE 1
+#define C_ERRO_PTHREAD_JOIN 2
+#define C_ERRO_MUTEX_INIT 3
+#define C_ERRO_MUTEX_DESTROY 4
+#define C_ERRO_CONDITION_INIT 5
+#define C_ERRO_CONDITION_DESTROY 6
+#define C_ERRO_MUTEX_LOCK 7
+#define C_ERRO_MUTEX_UNLOCK 8
+#define C_ERRO_CONDITION_WAIT 9
+#define C_ERRO_CONDITION_BROADCAST 10
+
+#define NUM_SEQUENCIAS 10
+#define Ping 1
+#define Pong 2
+
+/* Protótipos */
+void *thread_1(void *arg);
+void *thread_2(void *arg);
+
+/* Estrutura partilhada pelas threads */
+typedef struct {
+    pthread_mutex_t mutex;
+    pthread_cond_t cond;
+    int vez; /* 1: ping; 2: pong */
+} thread_params_t;
+
+int main(int argc, char *argv[]) {
+    pthread_t t1, t2;
+    thread_params_t thread_params;
+
+    (void)argc;
+    (void)argv;
+
+    /* A thread 1 escreve primeiro. */
+    thread_params.vez = Ping;
+
+    if ((errno = pthread_mutex_init(&thread_params.mutex, NULL)) != 0) {
+        ERROR(C_ERRO_MUTEX_INIT, "pthread_mutex_init() failed!");
+    }
+
+    if ((errno = pthread_cond_init(&thread_params.cond, NULL)) != 0) {
+        ERROR(C_ERRO_CONDITION_INIT, "pthread_cond_init() failed!");
+    }
+
+    if ((errno = pthread_create(&t1, NULL, thread_1, &thread_params)) != 0) {
+        ERROR(C_ERRO_PTHREAD_CREATE, "pthread_create() failed!");
+    }
+
+    if ((errno = pthread_create(&t2, NULL, thread_2, &thread_params)) != 0) {
+        ERROR(C_ERRO_PTHREAD_CREATE, "pthread_create() failed!");
+    }
+
+    /* Espera que ambas terminem antes de destruir a sincronização. */
+    if ((errno = pthread_join(t1, NULL)) != 0) {
+        ERROR(C_ERRO_PTHREAD_JOIN, "pthread_join() failed!");
+    }
+
+    if ((errno = pthread_join(t2, NULL)) != 0) {
+        ERROR(C_ERRO_PTHREAD_JOIN, "pthread_join() failed!");
+    }
+
+    if ((errno = pthread_cond_destroy(&thread_params.cond)) != 0) {
+        ERROR(C_ERRO_CONDITION_DESTROY, "pthread_cond_destroy() failed!");
+    }
+
+    if ((errno = pthread_mutex_destroy(&thread_params.mutex)) != 0) {
+        ERROR(C_ERRO_MUTEX_DESTROY, "pthread_mutex_destroy() failed!");
+    }
+
+    return 0;
+}
+
+/* Thread 1: escreve ping */
+void *thread_1(void *arg) {
+    thread_params_t *params = (thread_params_t *)arg;
+
+    for (int i = 0; i < NUM_SEQUENCIAS; i++) {
+        if ((errno = pthread_mutex_lock(&params->mutex)) != 0) {
+            ERROR(C_ERRO_MUTEX_LOCK, "pthread_mutex_lock() failed!");
+        }
+
+        while (params->vez != Ping) {
+            /* Liberta o mutex enquanto espera e readquire-o ao acordar. */
+            if ((errno = pthread_cond_wait(&params->cond,
+                                           &params->mutex)) != 0) {
+                ERROR(C_ERRO_CONDITION_WAIT, "pthread_cond_wait() failed!");
+            }
+        }
+
+        printf("ping…");
+        fflush(stdout);
+
+        /* Passa a vez à thread 2. */
+        params->vez = Pong;
+
+        if ((errno = pthread_cond_broadcast(&params->cond)) != 0) {
+            ERROR(C_ERRO_CONDITION_BROADCAST,
+                  "pthread_cond_broadcast() failed!");
+        }
+
+        if ((errno = pthread_mutex_unlock(&params->mutex)) != 0) {
+            ERROR(C_ERRO_MUTEX_UNLOCK, "pthread_mutex_unlock() failed!");
+        }
+    }
+
+    return NULL;
+}
+
+/* Thread 2: escreve pong */
+void *thread_2(void *arg) {
+    thread_params_t *params = (thread_params_t *)arg;
+
+    for (int i = 0; i < NUM_SEQUENCIAS; i++) {
+        if ((errno = pthread_mutex_lock(&params->mutex)) != 0) {
+            ERROR(C_ERRO_MUTEX_LOCK, "pthread_mutex_lock() failed!");
+        }
+
+        while (params->vez != Pong) {
+            if ((errno = pthread_cond_wait(&params->cond,
+                                           &params->mutex)) != 0) {
+                ERROR(C_ERRO_CONDITION_WAIT, "pthread_cond_wait() failed!");
+            }
+        }
+
+        printf("pong!\n");
+
+        /* Passa a vez à thread 1. */
+        params->vez = Ping;
+
+        if ((errno = pthread_cond_broadcast(&params->cond)) != 0) {
+            ERROR(C_ERRO_CONDITION_BROADCAST,
+                  "pthread_cond_broadcast() failed!");
+        }
+
+        if ((errno = pthread_mutex_unlock(&params->mutex)) != 0) {
+            ERROR(C_ERRO_MUTEX_UNLOCK, "pthread_mutex_unlock() failed!");
+        }
+    }
+
+    return NULL;
+}
